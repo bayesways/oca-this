@@ -1,164 +1,173 @@
 # OCA Claim Submission Agent
 
-This repo manages reimbursement claims that ultimately get submitted to the OCA WealthCare portal.
+This project helps you submit healthcare reimbursement claims to the OCA
+WealthCare portal. Give Claude a receipt or a folder of UHC Explanation of Benefits
+(EOB) PDFs, and it will prepare the claims and enter them into OCA.
 
-There is one submission path:
+## Before You Begin
 
-- `/submit-claim <receipt-file>...` creates direct claim(s) from receipt file(s) and
-  submits them to OCA
-- `/submit-claim --id <claim_id>` submits an already-prepared claim to OCA
-- `/submit-claim --all` submits every ready pending claim to OCA
+You will need:
 
-There are two ways to create those claims:
+- access to your OCA WealthCare account
+- [Claude Code](https://code.claude.com/docs) with its
+  [Chrome integration](https://code.claude.com/docs/en/chrome) enabled
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
+- your receipt or UHC EOB files saved on your computer
 
-- `direct` claims: usually created inline by `/submit-claim <receipt-file>...`, or
-  manually with `/new-claim`
-- `uhc` claims: created from a UHC EOB batch with `/uhc-bulk-import`
+Claude fills out the OCA forms, but you handle the OCA login yourself.
 
-## Flow A: Direct Claim
+> **Privacy:** Receipts, EOBs, claimant names, and saved claims may contain personal
+> health information. Keep this repository private and do not commit or share the
+> `data/` directory or `config/claimants.toml`.
 
-### Step 1: Create and Submit the Claim
+## One-Time Setup
 
-```bash
-/submit-claim <receipt-file>... [--type <type>] [--claimant "Name"]
+1. Download or clone this repository and open its folder in Claude Code.
+2. Open a terminal in the project folder and install its dependencies:
+
+   ```bash
+   uv sync
+   ```
+
+3. Create your private claimant list:
+
+   ```bash
+   cp config/claimants.example.toml config/claimants.toml
+   ```
+
+4. Open `config/claimants.toml` and replace the example names with the names shown
+   in your OCA account:
+
+   ```toml
+   [claimants]
+   allowed = [
+     "Alex Smith",
+     "Blair Smith",
+   ]
+   ```
+
+5. Start Claude Code with browser access:
+
+   ```bash
+   claude --chrome
+   ```
+
+   If Claude Code is already open, enter `/chrome` and connect it to Chrome or
+   Microsoft Edge.
+
+If you would rather not use the terminal yourself, ask Claude:
+
+```text
+Help me complete the one-time setup for this project.
 ```
 
-This command:
+## Submit a Receipt
 
-- creates one claim per receipt file with `source=direct`
-- stores the receipt
-- extracts `service_date`, `amount`, and `provider` from the receipt
-- resolves any provided claimant against `config/claimants.toml`
-- uses the provided `type`, or classifies the claim before submission if `type` is
-  omitted
-- treats a provided `--type` as explicit user intent
-- asks the user if classification is still unclear
-- submits each ready claim to OCA in sequence
-- continues past individual submission failures unless you tell it to stop; failed
-  claims remain pending
+In Claude Code, enter:
 
-If parsing is partial, the claim is still created so it can be fixed manually before
-submission.
-
-### Optional: Create Without Submitting
-
-```bash
-/new-claim <receipt-file> [--type <type>] [--claimant "Name"]
+```text
+/submit-claim "/Users/alex/Downloads/dentist-receipt.pdf" --claimant "Alex"
 ```
 
-Use this when you want to create a direct claim first and submit it later.
+Replace the example path with the location of your receipt. Keep quotation marks
+around paths that contain spaces.
 
-### Alternative: Submit an Existing Direct Claim
+Claude will:
 
-```bash
-/submit-claim --id <claim_id> [--claimant "Name"]
+1. read the receipt
+2. identify the date, amount, provider, and expense type
+3. ask you about anything unclear
+4. open the OCA portal and wait while you log in
+5. complete and submit the claim
+6. tell you whether submission succeeded
+
+You can submit several receipts at once:
+
+```text
+/submit-claim "/Users/alex/Downloads/receipt-1.pdf" "/Users/alex/Downloads/receipt-2.pdf" --claimant "Alex"
 ```
 
-`--claimant` is resolved against `config/claimants.toml`. Unique first names are
-accepted and expanded to the configured full name. If provided, it overrides the
-stored claimant on that claim before submission.
+Each receipt becomes a separate claim.
 
-## Flow B: UHC Bulk Import
+### Save a Claim for Later
 
-### Step 1: Import UHC EOBs
+To prepare a claim without submitting it:
 
-```bash
-/uhc-bulk-import <file-or-dir> [--dry-run]
+```text
+/new-claim "/Users/alex/Downloads/receipt.pdf" --claimant "Alex"
 ```
 
-Or run the parser directly:
+Claude will give you a claim ID. Submit it later with:
 
-```bash
-uv --directory "$(git rev-parse --show-toplevel)" run python src/eob_parser.py <file-or-dir> [--dry-run]
+```text
+/submit-claim --id 2026-06-18_001
 ```
 
-This command:
+## Import UHC EOBs
 
-- reads a single UHC EOB PDF or a directory of PDFs
-- verifies that per-claim out-of-pocket totals match the front-page total
-- creates one claim per out-of-pocket line item with `source=uhc`
-- extracts a sub-PDF receipt for each imported claim
-- detects the claimant from the UHC member page using the configured claimant list
-- sets `type=null`
-- stores the UHC claim number in `source_claim_number` for deduplication
+If you have one or more UHC EOB PDFs, put them in a folder and run these commands in
+Claude Code:
 
-### Step 2: Classify Imported Claims
-
-```bash
-/classify-claim <claim_id>
+```text
+/uhc-bulk-import "/Users/alex/Downloads/UHC EOBs"
 /classify-claim --all
-```
-
-### Step 3: Submit to OCA
-
-```bash
 /submit-claim --all
 ```
 
-## What Runs Under Each Command
+The first command previews the import and creates claims from the EOBs. The second
+checks each expense type with you. The third submits all claims that are ready.
+Importing the same UHC claim again will not create a duplicate.
 
-- `/uhc-bulk-import`
-  Wraps the native parser script:
-  `uv --directory "$(git rev-parse --show-toplevel)" run python src/eob_parser.py <file-or-dir> [--dry-run]`
-  in [src/eob_parser.py](src/eob_parser.py). This is the deterministic UHC EOB importer that verifies totals, creates `source=uhc` claims, and extracts per-claim receipt PDFs.
+## Review or Retry Claims
 
-- `/new-claim`
-  This is a skill-driven workflow, not a single Python script. Under the hood it calls the storage CLI in [src/storage/cli.py](src/storage/cli.py), mainly `new`, `add-receipt`, and `update`, then reads the receipt and persists any parsed metadata.
+- Submit a previously saved claim:
 
-- `/parse-claim`
-  This is also a skill workflow over [src/storage/cli.py](src/storage/cli.py). It loads an existing claim, re-reads its stored receipt files, re-extracts metadata, and writes repairs back through `update`.
+  ```text
+  /submit-claim --id 2026-06-18_001
+  ```
 
-- `/classify-claim`
-  This is a skill workflow rather than a native Python command. It reads receipt PDFs, proposes a claim `type` using rules and heuristics, then persists the chosen type via `uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli update <claim_id> --type <type>`.
+- Submit every claim that is ready:
 
-- `/submit-claim`
-  This is a mixed workflow rather than one Python entrypoint. For direct receipts it first creates claims via [src/storage/cli.py](src/storage/cli.py); for existing claims it loads them from storage; then it uses browser automation to fill the OCA portal and finally marks success with `uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli set-status <claim_id> submitted`.
+  ```text
+  /submit-claim --all
+  ```
 
-## Claim Model
+- Re-read a receipt when details were missed:
 
-Each claim now has:
+  ```text
+  /parse-claim 2026-06-18_001
+  ```
 
-- `source`: `direct` | `uhc`
-- `status`: `pending` | `submitted`
-- `type`
-- `service_date`
-- `amount`
-- `provider`
-- `claimant`
-- `source_claim_number` for UHC-imported claims
-- receipt files under `data/claims/<claim_id>/receipts/`
+If a submission fails, the claim remains saved and can be retried. Claude does not
+mark a claim as submitted unless the OCA submission succeeds.
 
-A claim is ready for submission when:
+## Troubleshooting
 
-- `status=pending`
-- `type` is set
-- `service_date` and `amount` are populated
-- at least one receipt exists
+### Claude cannot find the receipt
 
-## Storage CLI
+Use the receipt's complete path and put it in quotation marks:
 
-Claims are stored as files under `data/`.
-
-Configured claimants live in a local-only `config/claimants.toml`, which is gitignored.
-Use [config/claimants.example.toml](config/claimants.example.toml)
-as the template for your private claimant list.
-
-Useful commands:
-
-```bash
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli list
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli list --ready
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli list --source uhc
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli get <claim_id>
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli update <claim_id> --type medical --provider "..."
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli set-status <claim_id> submitted
-uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli migrate --dry-run
+```text
+/submit-claim "/Users/alex/My Receipts/receipt.pdf" --claimant "Alex"
 ```
 
-## Technical Notes
+### Claude does not recognize the claimant
 
-- Claims are stored in `data/claims/<claim_id>/claim.json`
-- The EOB parser uses PyMuPDF and creates imported claims deterministically
-- Duplicate UHC imports are prevented using `source_claim_number`
-- OCA submission is browser-automation driven; the user still handles login
-- Legacy claim files remain readable, and `uv --directory "$(git rev-parse --show-toplevel)" run python -m src.storage.cli migrate` rewrites them intentionally into the new schema
+Check that the person's full name appears in `config/claimants.toml`. You may use a
+first name only when it identifies exactly one person in that file.
+
+### Receipt details are missing
+
+Claude saves a partially read claim instead of guessing. Correct the requested
+details, or run `/parse-claim <claim-id>` to read its receipt again.
+
+### The OCA portal is not opening
+
+Enter `/chrome` in Claude Code and reconnect the browser extension. You may also
+need to open the portal yourself and complete login before asking Claude to
+continue.
+
+## For Developers
+
+Implementation details, storage commands, and the claim data model are documented
+in [DEVELOPMENT.md](DEVELOPMENT.md).
